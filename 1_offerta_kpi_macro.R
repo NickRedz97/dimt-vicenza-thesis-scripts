@@ -131,7 +131,7 @@ theme_thesis <- theme_minimal(base_family = "serif", base_size = 12) +
     axis.text    = element_text(size = 11),
     panel.grid.minor = element_blank(),
     legend.title = element_blank(),
-    plot.margin  = margin(6, 28, 6, 28) # extra lateral room to avoid legend truncation
+    plot.margin  = margin(6, 28, 6, 28)
   )
 
 theme_legend_big <- theme(
@@ -139,7 +139,7 @@ theme_legend_big <- theme(
   legend.text       = element_text(size = 11),
   legend.key.width  = grid::unit(1.0, "lines"),
   legend.key.height = grid::unit(1.0, "lines"),
-  legend.box.margin = margin(10, 30, 10, 30) # extra padding to prevent clipping
+  legend.box.margin = margin(10, 30, 10, 30)
 )
 
 theme_axes_big <- theme(
@@ -290,6 +290,10 @@ save_gt_png <- function(gt_tbl, path) {
   )
 }
 
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# CHANGE REQUESTED: table titles = "<Macro EN> - <Year>"
+# Uses macro_title() to map Emazie/Plasma/Piastrine -> RBCs/Plasma/Platelets
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) {
   months_year <- tibble(month = seq.Date(as.Date(paste0(year_sel,"-01-01")),
                                          as.Date(paste0(year_sel,"-12-01")), by = "month"))
@@ -324,9 +328,10 @@ save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) 
   readr::write_csv(df_wide, csv_path)
   
   df_wide_png <- df_wide %>% rename(Month = Mese)
+  macro_en <- macro_title(mc)  # RBCs / Plasma / Platelets
   tab <- df_wide_png %>%
     gt() %>%
-    tab_header(title = glue("{mc} — Monthly collection by ABO/Rh — {year_sel}")) %>%
+    tab_header(title = glue("{macro_en} - {year_sel}")) %>%  # <<< ONLY macro - year
     fmt_number(columns = where(is.numeric), decimals = 0, use_seps = TRUE) %>%
     gt_style_thesis()
   save_gt_png(tab, png_path)
@@ -337,7 +342,7 @@ save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) 
 # -----------------------------------------------------------------------------
 # MAIN LOOP
 # -----------------------------------------------------------------------------
-for (mc in macro_levels) {
+for (mc in c("Emazie","Plasma","Piastrine")) {
   log_msg("== Macro: ", mc, " ==")
   out_macro_dir <- file.path(out_root, mc)
   dir_csv   <- file.path(out_macro_dir, "file csv")
@@ -450,7 +455,6 @@ for (mc in macro_levels) {
     pivot_longer(cols = c(Collected, Transfused, Wasted, Ceded),
                  names_to = "flow", values_to = "val") %>%
     filter(!is.na(val)) %>%
-    # >>> CRITICAL FIX to avoid NA holes: normalize *before* aggregating by component <<<
     mutate(emocomponente_std = ifelse(
       is.na(emocomponente_std) | emocomponente_std %in% c("NA","") |
         trimws(emocomponente_std) == "", "OTHER_UNSPECIFIED", emocomponente_std
@@ -458,7 +462,6 @@ for (mc in macro_levels) {
     group_by(month, emocomponente_std, flow) %>%
     summarise(val = sum(val, na.rm = TRUE), .groups = "drop")
   
-  # Exclude plasma-like outside Plasma (original behavior)
   if (mc != "Plasma") {
     flow_by_emc <- flow_by_emc %>%
       mutate(is_plasma_like = is_plasma_std(emocomponente_std)) %>%
@@ -503,7 +506,6 @@ for (mc in macro_levels) {
       summarise(val = sum(val, na.rm = TRUE), .groups = "drop") %>%
       ungroup()
     
-    # Legend order: present mains (in allowed order) + Other
     present_main <- flow_by_emc %>%
       filter(comp_group != "Other") %>%
       mutate(code = extract_code(comp_group)) %>%
@@ -513,14 +515,12 @@ for (mc in macro_levels) {
     present_main <- present_main %>% filter(!is.na(comp_group))
     legend_levels <- unique(c(present_main$comp_group, "Other"))
     
-    # Wrapped labels (2-column legend), left-aligned to avoid truncation
     wrap_lbl <- function(x, w = 32) stringr::str_wrap(x, width = w)
     legend_labels <- wrap_lbl(legend_levels, 32)
     
     flow_by_emc <- flow_by_emc %>%
       mutate(comp_group = factor(comp_group, levels = legend_levels))
     
-    # Palette + grey for Other
     base_cols <- c("#0072B2","#E69F00","#009E73","#D55E00","#56B4E9","#CC79A7","#F0E442","#000000")
     n_main <- max(0, length(legend_levels) - 1)
     comp_pal <- setNames(c(if (n_main>0) base_cols[seq_len(n_main)] else character(), "#999999"),
@@ -542,8 +542,8 @@ for (mc in macro_levels) {
         legend.text = element_text(size = 11),
         legend.key.width = grid::unit(1.0, "lines"),
         legend.key.height = grid::unit(1.0, "lines"),
-        legend.box.margin = margin(12, 36, 12, 36), # more lateral padding
-        plot.margin = margin(8, 36, 8, 36)          # more room to avoid lateral truncation
+        legend.box.margin = margin(12, 36, 12, 36),
+        plot.margin = margin(8, 36, 8, 36)
       ) +
       guides(fill = guide_legend(ncol = 2, byrow = TRUE, label.hjust = 0))
     
@@ -552,7 +552,7 @@ for (mc in macro_levels) {
            width = content_width_in, height = height_plot, units = "in", dpi = target_ppi)
   }
   
-  # Annual group tables (unchanged)
+  # Annual group tables
   for (yy in c(2023, 2024, 2025)) {
     save_group_tables_for_year(mc, yy, rac_m, dir_csv, dir_tab)
   }
