@@ -2,26 +2,15 @@
 # compute_LT_by_macro.R — Lead Time (donazione → trasfusione)
 # Per-CDM, poi accorpamento per macro (RBCs, Plasma, Platelets)
 #
-# Input (CSV normalizzati):
-#   - raccolta/normalized/raccolta_merged_clean_with_group.csv  (usa: cdm, data_prestazione_date)
-#   - trasfuso/normalized/ULSS7.csv                             (usa: cdm, emc_emolife, data_trasfusione, ospedale/reparto)
-#   - trasfuso/normalized/ULSS8.csv                             (usa: cdm, emc_emolife, data_trasfusione, ospedale/reparto)
-#
-# Output:
-#   .../analisi complessive/LeadTime/
-#     ├─ lt_per_record_all.csv
-#     ├─ lt_exclusions_summary.csv
-#     ├─ lt_summary_by_macro.csv                 (record-weighted)
-#     ├─ lt_by_cdm_all.csv
-#     ├─ lt_by_cdm_summary_by_macro.csv          (unweighted by CDM)
-#     ├─ LT_summary_all.png
-#     └─ LT_byCDM_summary_all.png
-#   .../analisi complessive/LeadTime/<Macro>/{csv,tables_png,plots}/...
+# NOTE: Grafici resi più leggibili e coerenti con gli altri script.
+# - Titolo dei grafici: SOLO l’emocomponente (RBCs / Plasma / Platelets), centrato.
+# - Sottotitoli rimossi.
+# - Nessun cambiamento alla logica o agli output (stessi file CSV/PNG).
 # ============================================================
 
 suppressPackageStartupMessages({
   pkgs <- c("readr","dplyr","lubridate","stringr","janitor",
-            "purrr","tidyr","ggplot2","gt","glue")
+            "purrr","tidyr","ggplot2","gt","glue","scales")
   miss <- pkgs[!(pkgs %in% rownames(installed.packages()))]
   if (length(miss)) install.packages(miss, dependencies = TRUE)
   lapply(pkgs, library, character.only = TRUE)
@@ -54,12 +43,27 @@ is_plasma <- function(x){ x0 <- tolower(as.character(x)); grepl("plasm|\\bffp\\b
 is_platelet <- function(x){ x0 <- tolower(as.character(x)); grepl("\\b4305\\b|\\bplt\\b|piastr|platelet|buffy|\\b2004\\b|\\b1904\\b", x0) }
 macro_from_component <- function(x){ dplyr::case_when(is_rbc(x) ~ "RBCs", is_plasma(x) ~ "Plasma", is_platelet(x) ~ "Platelets", TRUE ~ NA_character_) }
 
+# ---- Tema & colori (coerenti con altri script) -----------------------------
 theme_thesis <- theme_minimal(base_family = "serif", base_size = 13) +
-  theme(plot.title = element_text(face="bold", size=16),
-        axis.title = element_text(face="bold"),
-        legend.position="bottom",
-        panel.grid.minor=element_blank(),
-        plot.margin=margin(12,18,12,12))
+  theme(
+    plot.title   = element_text(face="bold", size=18, hjust=0.5, margin=margin(b=6)),
+    axis.title   = element_text(face="bold", size=13),
+    axis.text    = element_text(size=12),
+    panel.grid.minor = element_blank(),
+    legend.position="bottom",
+    legend.title = element_blank(),
+    plot.margin  = margin(6, 18, 6, 18)   # poco spazio sopra/sotto, respiro laterale
+  )
+
+theme_axes_big <- theme(
+  axis.text.x  = element_text(size=12),
+  axis.text.y  = element_text(size=12),
+  axis.title.x = element_text(size=13),
+  axis.title.y = element_text(size=13)
+)
+
+# Accenti per macro (Okabe–Ito)
+macro_accent <- c(RBCs="#0072B2", Plasma="#009E73", Platelets="#D55E00")
 
 fd_binwidth <- function(x){
   x <- x[is.finite(x)]
@@ -130,7 +134,6 @@ readr::write_csv(tibble(metric=c("excluded_missing_or_na","excluded_negative_lt"
 # ---------------------------
 # Vista per-CDM e accorpamento per macro (unweighted by CDM)
 # ---------------------------
-# 1) Per-CDM (ogni riga = un CDM in un macro, con statistiche proprie)
 lt_by_cdm <- lt %>%
   group_by(cdm, macro) %>%
   summarise(
@@ -142,7 +145,6 @@ lt_by_cdm <- lt %>%
     .groups = "drop"
   )
 
-# 2) Accorpamento per macro della distribuzione dei mean_lt dei CDM (unweighted)
 lt_by_cdm_summary <- lt_by_cdm %>%
   group_by(macro) %>%
   summarise(
@@ -155,7 +157,6 @@ lt_by_cdm_summary <- lt_by_cdm %>%
   ) %>%
   arrange(macro)
 
-# 3) Accorpamento per macro record-weighted (diretto sui record)
 lt_summary_record <- lt %>%
   group_by(macro) %>%
   summarise(
@@ -173,7 +174,7 @@ readr::write_csv(lt_by_cdm,                file.path(lead_root, "lt_by_cdm_all.c
 readr::write_csv(lt_by_cdm_summary,        file.path(lead_root, "lt_by_cdm_summary_by_macro.csv"))
 readr::write_csv(lt_summary_record,        file.path(lead_root, "lt_summary_by_macro.csv"))
 
-# Tabelle PNG complessive
+# Tabelle PNG complessive (INVARIATE)
 tab_rec <- gt(lt_summary_record) |>
   tab_header(title = "Lead Time by macro — record-weighted (days)") |>
   fmt_number(columns = c(min_days, mean_days, median_days, max_days), decimals = 1) |>
@@ -214,7 +215,7 @@ process_macro <- function(macro_name){
     summarise(n_cdms=n(), min_days=min(mean_lt), mean_days=mean(mean_lt), median_days=median(mean_lt), max_days=max(mean_lt))
   readr::write_csv(summ_cdm, file.path(csv_dir, glue("lt_by_cdm_summary_{macro_name}.csv")))
   
-  # --- Tabelle PNG
+  # --- Tabelle PNG (INVARIATE)
   tab1 <- gt(summ_rec) |>
     tab_header(title = glue("{macro_name} — Lead Time (record-weighted)")) |>
     fmt_number(columns = c(min_days, mean_days, median_days, max_days), decimals = 1) |>
@@ -229,31 +230,72 @@ process_macro <- function(macro_name){
     tab_options(table.font.names="serif", table.font.size=px(16), heading.title.font.size=px(20), data_row.padding=px(6))
   save_gt_png(tab2, file.path(tab_dir, glue("LT_byCDM_summary_{macro_name}.png")), vwidth = 1900)
   
-  # --- Grafici: distribuzione LT e distribuzione mean_lt per CDM
+  # ---------------------------
+  # GRAFICI (solo titolo = macro_name; NESSUN sottotitolo)
+  # ---------------------------
+  accent   <- macro_accent[[macro_name]]
+  fill_col <- scales::alpha(accent, 0.35)
+  dens_col <- accent
+  line_col <- accent
+  
+  # --- 1) Distribuzione LT (per record)
   if (nrow(df_rec) > 0) {
-    bw <- fd_binwidth(df_rec$LT_days); mavg <- summ_rec$mean_days; mmed <- summ_rec$median_days
-    g1 <- ggplot(df_rec, aes(LT_days)) +
-      geom_histogram(binwidth=bw, alpha=0.85) +
-      geom_density(aes(y=..count..)) +
-      geom_vline(xintercept=mavg, linetype="dashed") +
-      geom_vline(xintercept=mmed, linetype="dotted") +
-      annotate("text", x=mavg, y=Inf, vjust=1.7, label=glue("mean={round(mavg,1)}")) +
-      annotate("text", x=mmed, y=Inf, vjust=3.2, label=glue("median={round(mmed,1)}")) +
-      labs(title=glue("{macro_name} — Distribution of LT (days)"),
-           subtitle=glue("Histogram (binwidth={bw}); dashed=mean, dotted=median"),
-           x="Lead Time (days)", y="Count") + theme_thesis
-    ggsave(file.path(plot_dir, glue("LT_distribution_{macro_name}.png")), g1, width=13, height=6.8, dpi=300)
+    bw   <- fd_binwidth(df_rec$LT_days)
+    mavg <- summ_rec$mean_days
+    mmed <- summ_rec$median_days
+    q    <- quantile(df_rec$LT_days, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+    
+    g1 <- ggplot(df_rec, aes(x = LT_days)) +
+      annotate("rect", xmin = q[1], xmax = q[3], ymin = -Inf, ymax = Inf,
+               fill = scales::alpha(accent, 0.08), colour = NA) +
+      geom_histogram(binwidth = bw, boundary = 0, fill = fill_col, colour = "grey25") +
+      geom_density(aes(y = ..count..), linewidth = 1.2, colour = dens_col) +
+      geom_vline(xintercept = mavg, linetype = "solid",  linewidth = 1.0, colour = line_col) +
+      geom_vline(xintercept = mmed, linetype = "dashed", linewidth = 1.0, colour = line_col) +
+      annotate("label", x = mavg, y = Inf, vjust = 1.2,
+               label = glue("mean = {round(mavg,1)}"), size = 3.8,
+               label.size = 0, fill = "white", colour = line_col) +
+      annotate("label", x = mmed, y = Inf, vjust = 2.4,
+               label = glue("median = {round(mmed,1)}"), size = 3.8,
+               label.size = 0, fill = "white", colour = line_col) +
+      scale_x_continuous(labels = scales::comma_format(accuracy = 1), breaks = scales::pretty_breaks(n = 10)) +
+      scale_y_continuous(labels = scales::comma) +
+      labs(
+        title = macro_name,    # <<<<<< SOLO EMOCOMPONENTE
+        x = "Lead Time (days)", y = "Count"
+      ) +
+      theme_thesis + theme_axes_big +
+      coord_cartesian(clip = "off")
+    
+    ggsave(file.path(plot_dir, glue("LT_distribution_{macro_name}.png")),
+           g1, width = 13, height = 6.8, dpi = 300, bg = "white")
   }
   
+  # --- 2) Distribuzione delle medie per CDM
   if (nrow(df_cdm) > 0) {
     bw2 <- fd_binwidth(df_cdm$mean_lt)
-    g2 <- ggplot(df_cdm, aes(mean_lt)) +
-      geom_histogram(binwidth=bw2, alpha=0.85) +
-      geom_density(aes(y=..count..)) +
-      labs(title=glue("{macro_name} — CDM-level mean LT (days)"),
-           subtitle=glue("Histogram (binwidth={bw2}) on CDM means"),
-           x="CDM mean LT (days)", y="CDM count") + theme_thesis
-    ggsave(file.path(plot_dir, glue("LT_byCDM_distribution_{macro_name}.png")), g2, width=13, height=6.8, dpi=300)
+    q2  <- quantile(df_cdm$mean_lt, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+    
+    g2 <- ggplot(df_cdm, aes(x = mean_lt)) +
+      annotate("rect", xmin = q2[1], xmax = q2[3], ymin = -Inf, ymax = Inf,
+               fill = scales::alpha(accent, 0.08), colour = NA) +
+      geom_histogram(binwidth = bw2, boundary = 0, fill = fill_col, colour = "grey25") +
+      geom_density(aes(y = ..count..), linewidth = 1.2, colour = dens_col) +
+      geom_vline(xintercept = q2[2], linetype = "dashed", linewidth = 1.0, colour = line_col) +
+      annotate("label", x = q2[2], y = Inf, vjust = 1.2,
+               label = glue("median = {round(q2[2],1)}"),
+               size = 3.8, label.size = 0, fill = "white", colour = line_col) +
+      scale_x_continuous(labels = scales::comma_format(accuracy = 1), breaks = scales::pretty_breaks(n = 10)) +
+      scale_y_continuous(labels = scales::comma) +
+      labs(
+        title = macro_name,   # <<<<<< SOLO EMOCOMPONENTE
+        x = "CDM mean LT (days)", y = "CDM count"
+      ) +
+      theme_thesis + theme_axes_big +
+      coord_cartesian(clip = "off")
+    
+    ggsave(file.path(plot_dir, glue("LT_byCDM_distribution_{macro_name}.png")),
+           g2, width = 13, height = 6.8, dpi = 300, bg = "white")
   }
   
   invisible(list(record_summary = summ_rec, bycdm_summary = summ_cdm))
