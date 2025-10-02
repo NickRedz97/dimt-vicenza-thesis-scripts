@@ -1,13 +1,10 @@
 # =============================================================================
-# Script name : normalizza_cessioni.R
+# Script name : normalizza_cessioni.R  (visual refresh per uniformità)
 # Purpose     : Normalize "cessioni" Excel files into a unified CSV and produce
 #               descriptive figures and tables for RBCs, Plasma, and Platelets.
-# Inputs      : Excel files in <.../cessioni/dataset>:
-#               "cessioni 2023.xlsx", "cessioni 2024.xlsx", "cessioni 2025.xlsx"
-# Outputs     : <.../cessioni/normalized/cessioni_2023_2025.csv>
-#               PNG figures and tables in <.../cessioni/outputs>
-# Scope       : Records of ceded units including component, donor type, movement
-#               type, recipient, ceding/acquiring facilities, and dates.
+# Change req. : RIMOSSI TUTTI I TITOLI DAI GRAFICI. Etichette % nei pie chart
+#               più grandi/visibili, legende più visibili (dimensione maggiore).
+#               Nessuna modifica alla logica dei dati.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -25,13 +22,12 @@ out_graphs  <- "C:/Users/nicolo.rossi/Desktop/Elaborazioni Tesi/R tesi/cessioni/
 dir.create(out_graphs, showWarnings = FALSE, recursive = TRUE)
 
 # -----------------------------------------------------------------------------
-# Word export sizing — A4 portrait + 3 pt side margins
-# Figures are saved exactly at text width; tables are centered and narrower.
+# Word export sizing — A4 portrait + 3 pt side margins (exact text width)
 # -----------------------------------------------------------------------------
-page_width_in   <- 8.27        # A4 width in inches
-left_margin_pt  <- 3           # side margins in points
+page_width_in   <- 8.27
+left_margin_pt  <- 3
 right_margin_pt <- 3
-target_ppi      <- 96          # 96 ppi → Word places at exact size
+target_ppi      <- 96
 
 content_width_in <- page_width_in - (left_margin_pt + right_margin_pt)/72
 content_width_px <- round(content_width_in * target_ppi)
@@ -121,18 +117,51 @@ df <- cessioni_all %>%
   filter(!is.na(data), !is.na(numero_unita_cedute)) %>%
   filter(macro != "Other")
 
-# Plot theme (Word/print-friendly)
+# -----------------------------------------------------------------------------
+# Thesis style (uniform across figures) — NO TITLES, legende più grandi
+# -----------------------------------------------------------------------------
+# Okabe–Ito palette
+pal_okabe <- c(
+  "RBCs"      = "#0072B2",
+  "Plasma"    = "#009E73",
+  "Platelets" = "#D55E00"
+)
+
 theme_thesis <- theme_minimal(base_family = "serif", base_size = 12) +
   theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
+    plot.title   = element_blank(),              # <<— no titles
+    plot.subtitle= element_blank(),              # <<— no subtitles
+    axis.title   = element_text(face = "bold", size = 12),
+    axis.text    = element_text(size = 11),
     panel.grid.minor = element_blank(),
-    legend.position = "right"
+    legend.position  = "bottom",
+    legend.title     = element_blank(),
+    legend.text      = element_text(size = 13),  # <<— più visibile
+    legend.key.width  = grid::unit(1.0, "lines"),
+    legend.key.height = grid::unit(1.0, "lines"),
+    legend.box.margin = margin(8, 24, 8, 24),
+    plot.margin       = margin(4, 18, 4, 18)     # margini compatti, niente bianco sopra/sotto
   )
 
+theme_axes_big <- theme(
+  axis.text.x  = element_text(size = 11, angle = 45, hjust = 1),
+  axis.text.y  = element_text(size = 11),
+  axis.title.x = element_text(size = 12),
+  axis.title.y = element_text(size = 12)
+)
+
+label_date_en <- function(fmt = "%b %Y") {
+  function(d) {
+    old <- try(Sys.getlocale("LC_TIME"), silent = TRUE)
+    on.exit(try(Sys.setlocale("LC_TIME", old), silent = TRUE))
+    ok <- try(Sys.setlocale("LC_TIME", "C"), silent = TRUE)
+    if (inherits(ok, "try-error") || is.na(ok)) try(Sys.setlocale("LC_TIME", "English"), silent = TRUE)
+    format(d, fmt)
+  }
+}
+
 # -----------------------------------------------------------------------------
-# Figure 1 — Monthly trend (x-axis quarterly ticks; monthly data resolution)
+# Figure 1 — Monthly trend (quarterly ticks, monthly resolution) — NO TITLE
 # -----------------------------------------------------------------------------
 df_mens <- df %>%
   mutate(mese_ref = floor_date(data, "month")) %>%
@@ -145,22 +174,22 @@ max_m <- max(df_mens$mese_ref, na.rm = TRUE)
 quarter_breaks <- seq(floor_date(min_m, "quarter"), ceiling_date(max_m, "quarter"), by = "3 months")
 
 g1 <- ggplot(df_mens, aes(mese_ref, units, colour = macro, group = macro)) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 1.2) +
+  geom_line(linewidth = 1.15) +
+  geom_point(size = 2) +
+  scale_color_manual(values = pal_okabe) +
+  scale_y_continuous(labels = scales::comma) +
   scale_x_date(
     breaks = quarter_breaks,
     labels = function(x) paste0(year(x), "-Q", quarter(x)),
     expand = expansion(mult = c(0.01, 0.02))
   ) +
-  labs(title = "Monthly trend of ceded units by macro",
-       x = "Month (quarterly ticks)", y = "Units", colour = "Macro") +
-  theme_thesis +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  labs(x = "Month (quarterly ticks)", y = "Units") +
+  theme_thesis + theme_axes_big
 ggsave(file.path(out_graphs, "trend_mensile.png"),
        g1, width = content_width_in, height = 5.8, dpi = target_ppi, units = "in")
 
 # -----------------------------------------------------------------------------
-# Figure 2 — Distribution of ceded units (top ceding facilities, boxplot)
+# Figure 2 — Distribution of ceded units (top ceding facilities) — NO TITLE
 # -----------------------------------------------------------------------------
 top5_tbl <- df %>%
   group_by(struttura_cedente) %>%
@@ -169,19 +198,21 @@ top5_tbl <- df %>%
 top5_fac <- head(top5_tbl$struttura_cedente, min(5, nrow(top5_tbl)))
 df_top <- df %>% filter(struttura_cedente %in% top5_fac)
 
-g2 <- ggplot(df_top,
-             aes(x = reorder(struttura_cedente, numero_unita_cedute, FUN = sum, na.rm = TRUE),
-                 y = numero_unita_cedute, fill = macro)) +
-  geom_boxplot(outlier.size = 0.8) +
+g2 <- ggplot(
+  df_top,
+  aes(x = reorder(struttura_cedente, numero_unita_cedute, FUN = sum, na.rm = TRUE),
+      y = numero_unita_cedute, fill = macro)
+) +
+  geom_boxplot(outlier.size = 0.9) +
+  scale_fill_manual(values = pal_okabe) +
   coord_flip() +
-  labs(title = "Distribution of ceded units (top ceding facilities)",
-       x = "Facility", y = "Units", fill = "Macro") +
+  labs(x = "Facility", y = "Units") +
   theme_thesis
 ggsave(file.path(out_graphs, "boxplot_strutture.png"),
-       g2, width = content_width_in, height = 5.8, dpi = target_ppi, units = "in")
+       g2, width = content_width_in, height = 6.2, dpi = target_ppi, units = "in")
 
 # -----------------------------------------------------------------------------
-# Figure 3 — Overall share by macro (totals)
+# Figure 3 — Overall share by macro (totals) — NO TITLE
 # -----------------------------------------------------------------------------
 df_tot <- df %>%
   group_by(macro) %>%
@@ -189,15 +220,16 @@ df_tot <- df %>%
   arrange(desc(units))
 
 g3 <- ggplot(df_tot, aes(x = reorder(macro, units), y = units, fill = macro)) +
-  geom_col(show.legend = FALSE) +
+  geom_col(width = 0.75, show.legend = FALSE) +
+  scale_fill_manual(values = pal_okabe) +
   coord_flip() +
-  labs(title = "Overall share by macro", x = NULL, y = "Total units") +
+  labs(x = NULL, y = "Total units") +
   theme_thesis
 ggsave(file.path(out_graphs, "share_macro.png"),
        g3, width = content_width_in, height = 4.8, dpi = target_ppi, units = "in")
 
 # -----------------------------------------------------------------------------
-# Figure 4 — Top 5 acquiring facilities (totals)
+# Figure 4 — Top 5 acquiring facilities (totals) — NO TITLE
 # -----------------------------------------------------------------------------
 df_acq <- df %>%
   filter(!is.na(struttura_acquirente), struttura_acquirente != "") %>%
@@ -207,66 +239,81 @@ df_acq <- df %>%
   slice_head(n = 5)
 
 g4 <- ggplot(df_acq, aes(x = reorder(struttura_acquirente, units), y = units)) +
-  geom_col(fill = "#2c7fb8") +
+  geom_col(fill = "#0072B2", width = 0.75) +
   coord_flip() +
-  labs(title = "Top 5 acquiring facilities",
-       x = "Acquiring facility", y = "Total units") +
+  labs(x = "Acquiring facility", y = "Total units") +
   theme_thesis
 ggsave(file.path(out_graphs, "top5_acquirenti.png"),
        g4, width = content_width_in, height = 5.8, dpi = target_ppi, units = "in")
 
 # -----------------------------------------------------------------------------
-# Figure 5 — Pie chart: share by movement type
+# Figure 5 — Pie chart: share by movement type — NO TITLE, % più grandi
 # -----------------------------------------------------------------------------
 df_pie_mov <- df %>%
   filter(!is.na(tipo_movimento), tipo_movimento != "") %>%
   group_by(tipo_movimento) %>%
   summarise(units = sum(numero_unita_cedute, na.rm = TRUE), .groups = "drop") %>%
   mutate(pct = units / sum(units),
-         lbl = ifelse(pct >= 0.05, paste0(round(pct * 100, 1), "%"), ""))
+         lbl = ifelse(pct >= 0.06, paste0(round(pct * 100, 1), "%"), ""))
+
+pal_disc <- scales::hue_pal()(nrow(df_pie_mov))
 
 g5 <- ggplot(df_pie_mov, aes(x = "", y = units, fill = tipo_movimento)) +
   geom_col(width = 1, color = "white") +
   coord_polar(theta = "y") +
-  geom_text(aes(label = lbl), position = position_stack(vjust = 0.5), size = 3) +
-  labs(title = "Share by movement type", x = NULL, y = NULL, fill = "Movement type") +
+  geom_text(aes(label = lbl),
+            position = position_stack(vjust = 0.5),
+            size = 5.2, fontface = "bold") +   # <<— % più grandi e in grassetto
+  scale_fill_manual(values = pal_disc) +
+  labs(x = NULL, y = NULL, fill = NULL) +
   theme_thesis +
-  theme(axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank())
+  theme(
+    axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.text = element_text(size = 13),                  # <<— legenda più visibile
+    legend.box.margin = margin(8, 24, 8, 24)
+  ) +
+  guides(fill = guide_legend(ncol = 2, byrow = TRUE))
 ggsave(file.path(out_graphs, "pie_tipo_movimento.png"),
-       g5, width = content_width_in, height = 7.0, dpi = target_ppi, units = "in")
+       g5, width = content_width_in, height = 7.2, dpi = target_ppi, units = "in")
 
 # -----------------------------------------------------------------------------
-# Figure 6 — Pie chart: share by recipient
+# Figure 6 — Pie chart: share by recipient — NO TITLE, % più grandi
 # -----------------------------------------------------------------------------
 df_pie_dest <- df %>%
   filter(!is.na(destinatario), destinatario != "") %>%
   group_by(destinatario) %>%
   summarise(units = sum(numero_unita_cedute, na.rm = TRUE), .groups = "drop") %>%
   mutate(pct = units / sum(units),
-         lbl = ifelse(pct >= 0.05, paste0(round(pct * 100, 1), "%"), ""))
+         lbl = ifelse(pct >= 0.06, paste0(round(pct * 100, 1), "%"), ""))
+
+pal_disc2 <- scales::hue_pal()(nrow(df_pie_dest))
 
 g6 <- ggplot(df_pie_dest, aes(x = "", y = units, fill = destinatario)) +
   geom_col(width = 1, color = "white") +
   coord_polar(theta = "y") +
-  geom_text(aes(label = lbl), position = position_stack(vjust = 0.5), size = 3) +
-  labs(title = "Share by recipient", x = NULL, y = NULL, fill = "Recipient") +
+  geom_text(aes(label = lbl),
+            position = position_stack(vjust = 0.5),
+            size = 5.2, fontface = "bold") +   # <<— % più grandi e in grassetto
+  scale_fill_manual(values = pal_disc2) +
+  labs(x = NULL, y = NULL, fill = NULL) +
   theme_thesis +
-  theme(axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank())
+  theme(
+    axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.text = element_text(size = 13),                  # <<— legenda più visibile
+    legend.box.margin = margin(8, 24, 8, 24)
+  ) +
+  guides(fill = guide_legend(ncol = 2, byrow = TRUE))
 ggsave(file.path(out_graphs, "pie_destinatario.png"),
-       g6, width = content_width_in, height = 7.5, dpi = target_ppi, units = "in")
+       g6, width = content_width_in, height = 7.6, dpi = target_ppi, units = "in")
 
 # =============================================================================
-# Tables (gt -> PNG) — centered, narrower than text width, no outer whitespace
+# Tables (gt -> PNG) — invariate (titoli mantenuti: non sono grafici)
 # =============================================================================
 
-# Percentage of text width occupied by the table within the PNG canvas
-table_pct <- 80  # 76–84 recommended for balanced lateral breathing room
+table_pct <- 80
 
-# Thesis table style: centered, readable alignments, subtle stripes
 gt_style_thesis <- function(gt_tbl,
                             title_px = 13, base_px = 11, label_px = 11,
                             font_family = c("Times New Roman", "Liberation Serif", "serif"),
@@ -296,18 +343,17 @@ gt_style_thesis <- function(gt_tbl,
     opt_row_striping()
 }
 
-# PNG export: canvas = text width; expand=0 removes external whitespace
 save_gt_png <- function(gt_tbl, filename) {
   gt::gtsave(
     gt_tbl,
     file   = file.path(out_graphs, paste0(filename, ".png")),
-    vwidth = content_width_px,  # image width equals Word text block width
-    expand = 0                  # no extra whitespace around the table
+    vwidth = content_width_px,
+    expand = 0
   )
 }
 
 # --------------------
-# Table 1 — Annual totals by macro (wide layout: years as rows, macros as columns)
+# Table 1 — Annual totals by macro
 # --------------------
 macros <- c("RBCs", "Plasma", "Platelets")
 
