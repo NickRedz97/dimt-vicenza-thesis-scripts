@@ -7,6 +7,10 @@
 #               - rows_used.csv (rows used in the figures)
 #               - top5_by_component.csv (top-5 departments per macro)
 # Horizon     : 2023-01-01 .. 2025-05-31
+# Note        : Migliorie visive: etichette asse X in obliquo dove utili e
+#               grafici sviluppati maggiormente in altezza per leggibilità.
+#               Nessun cambiamento nella logica dei dati, tranne l'esclusione
+#               delle "case di riposo" per la struttura MONTECCHIO.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -15,6 +19,8 @@ suppressPackageStartupMessages({
   library(lubridate)
   library(glue)
   library(forcats)
+  library(scales)
+  library(grid)
 })
 
 log_msg <- function(...) cat(format(Sys.time(), "[%Y-%m-%d %H:%M:%S]"), paste(..., collapse=" "), "\n")
@@ -34,16 +40,17 @@ dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 # WORD/A4 SIZING — PNGs sized to Word text width (A4, side margins 3 pt)
 # -----------------------------------------------------------------------------
 page_width_in   <- 8.27   # A4 portrait width in inches
-left_margin_pt  <- 3      # Word side margins in points
+left_margin_pt  <- 3
 right_margin_pt <- 3
-target_ppi      <- 96     # 96 ppi → Word inserts at exact size
+target_ppi      <- 96
 
 content_width_in <- page_width_in - (left_margin_pt + right_margin_pt)/72
 
-# Recommended heights (inches) for good balance at text width
-h_weekday_in <- 4.4
-h_trend_in   <- 5.0
-# top5 will be exported with legacy size (13x6.5 in at 150 dpi)
+# Heights (inches): più alte per leggibilità degli assi X
+h_weekday_in <- 5.0
+h_trend_in   <- 5.8
+top5_width_in  <- 13
+top5_height_in <- 7.8
 
 # -----------------------------------------------------------------------------
 # READ
@@ -130,27 +137,50 @@ data <- data %>%
   mutate(Structure = classify_structure_by_reparto(Reparto)) %>%
   mutate(Structure = if_else(Structure %in% final_structures, Structure, "Altro"))
 
+# -----------------------------------------------------------------------------
+# *** PUNCTUAL CHANGE REQUESTED ***
+# Exclude "casa di riposo" ONLY for Structure == "Montecchio"
+# (matches 'casa di riposo' in either Reparto or Ospedale; case/spacing insensitive)
+# -----------------------------------------------------------------------------
+is_casa_di_riposo <- function(x) {
+  str_detect(tolower(x %||% ""), "casa\\s*di\\s*riposo")
+}
+
+before_n <- nrow(data)
+data <- data %>%
+  filter(!(Structure == "Montecchio" & (is_casa_di_riposo(Reparto) | is_casa_di_riposo(Ospedale))))
+after_n <- nrow(data)
+log_msg("Filtered Casa di Riposo in Montecchio:", before_n - after_n, "rows removed")
+
 present_structures <- data %>% distinct(Structure) %>% pull(Structure)
 log_msg("Structures present:", paste(present_structures, collapse=", "))
 
 # -----------------------------------------------------------------------------
-# PLOT THEME (thesis style) + helpers
+# THEMES & PALETTES (coerenti con gli altri script)
 # -----------------------------------------------------------------------------
-theme_thesis <- theme_minimal(base_family = "serif", base_size = 12) +
+theme_thesis <- theme_minimal(base_family = "serif", base_size = 13) +
   theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
-    axis.title = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 18, margin = margin(b = 4)),
+    axis.title = element_text(face = "bold", size = 13),
+    axis.text  = element_text(size = 12),
     panel.grid.minor = element_blank(),
-    legend.title = element_text(face = "bold"),
-    plot.margin = margin(t = 6, r = 6, b = 6, l = 6)
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.text = element_text(size = 11),
+    legend.key.width  = unit(0.9, "lines"),
+    legend.key.height = unit(0.9, "lines"),
+    legend.box.margin = margin(2, 2, 2, 2),
+    plot.margin = margin(t = 6, r = 14, b = 6, l = 14)
   )
 
 urg_cols <- c(
-  "Scheduled"   = "#6baed6",
-  "Urgent"      = "#fd8d3c",
-  "Very urgent" = "#ef3b2c",
-  "Other"       = "#bdbdbd"
+  "Scheduled"   = "#6BAED6",
+  "Urgent"      = "#FD8D3C",
+  "Very urgent" = "#EF3B2C",
+  "Other"       = "#BDBDBD"
 )
+
+macro_cols <- c("RBC" = "#0072B2", "Plasma" = "#009E73", "Platelets" = "#D55E00")
 
 all_months <- tibble(Month = seq.Date(as.Date("2023-01-01"), as.Date("2025-05-01"), by = "month"))
 
@@ -163,11 +193,12 @@ save_plot_or_placeholder <- function(pdata, plot_fn, path, width_in, height_in, 
       width    = width_in,
       height   = height_in,
       units    = "in",
-      dpi      = dpi_in
+      dpi      = dpi_in,
+      bg       = "white"
     )
   } else {
     p_empty <- ggplot() + annotate("text", x=0, y=0, label=title_when_empty, size=5) + theme_void()
-    ggsave(filename = path, plot = p_empty, width = width_in/2, height = height_in/2, units = "in", dpi = dpi_in)
+    ggsave(filename = path, plot = p_empty, width = width_in/2, height = height_in/2, units = "in", dpi = dpi_in, bg = "white")
   }
 }
 
@@ -185,7 +216,9 @@ for (hospital in present_structures) {
     select(Structure, Date, Month, Weekday, Urgency, macro, Ospedale, Reparto, `EMC Emolife`, everything())
   readr::write_csv(rows_csv, file.path(hospital_dir, "rows_used.csv"))
   
-  # 1) Weekday distribution (by Urgency) — keep A4 text-width
+  # -------------------------
+  # 1) Weekday distribution
+  # -------------------------
   wk <- dfh %>%
     filter(!is.na(Urgency)) %>%
     count(Weekday, Urgency, name = "n") %>%
@@ -194,11 +227,16 @@ for (hospital in present_structures) {
   
   p_weekday_fn <- function(){
     ggplot(wk, aes(x = Weekday, y = n, fill = Urgency)) +
-      geom_col(position = "dodge") +
+      geom_col(position = position_dodge(width = 0.8), width = 0.7, colour = "grey25", linewidth = 0.2) +
       scale_fill_manual(values = urg_cols, drop = FALSE) +
-      labs(title = glue("Weekday Distribution — {hospital}"),
-           x = "Weekday", y = "Number of transfusions") +
-      theme_thesis
+      scale_y_continuous(labels = comma, expand = expansion(mult = c(0.02, 0.06))) +
+      labs(
+        title = hospital,
+        x = "Weekday", y = "Number of transfusions"
+      ) +
+      theme_thesis +
+      theme(axis.text.x = element_text(angle = 35, hjust = 1, vjust = 1)) +
+      guides(fill = guide_legend(nrow = 2, byrow = TRUE))
   }
   save_plot_or_placeholder(
     pdata   = wk,
@@ -208,7 +246,9 @@ for (hospital in present_structures) {
     height_in = h_weekday_in
   )
   
-  # 2) Urgency Trend (monthly) — keep A4 text-width
+  # -------------------------
+  # 2) Urgency Trend (monthly)
+  # -------------------------
   um <- dfh %>%
     filter(!is.na(Urgency)) %>%
     count(Month, Urgency, name = "n") %>%
@@ -220,14 +260,18 @@ for (hospital in present_structures) {
   
   p_trend_fn <- function(){
     ggplot(um, aes(x = Month, y = n, fill = Urgency)) +
-      geom_col() +
+      geom_col(colour = "grey25", linewidth = 0.2) +
       scale_fill_manual(values = urg_cols, drop = FALSE) +
+      scale_y_continuous(labels = comma, expand = expansion(mult = c(0.02, 0.06))) +
       scale_x_date(date_breaks = "3 months", date_labels = "%b %Y",
                    limits = c(as.Date("2023-01-01"), as.Date("2025-05-31"))) +
-      labs(title = glue("Urgency Trend — {hospital}"),
-           x = "Month", y = "Number of transfusions") +
+      labs(
+        title = hospital,
+        x = "Month", y = "Number of transfusions"
+      ) +
       theme_thesis +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+      guides(fill = guide_legend(nrow = 2, byrow = TRUE))
   }
   save_plot_or_placeholder(
     pdata   = um,
@@ -237,7 +281,9 @@ for (hospital in present_structures) {
     height_in = h_trend_in
   )
   
-  # 3) Top 5 departments by component — REVERT to legacy export size (13x6.5 in, 150 dpi)
+  # ------------------------------------------
+  # 3) Top 5 departments by component (facet)
+  # ------------------------------------------
   top_by_macro <- dfh %>%
     filter(!is.na(macro)) %>%
     group_by(macro, Reparto) %>%
@@ -250,7 +296,6 @@ for (hospital in present_structures) {
     ) %>%
     group_by(macro) %>%
     mutate(
-      # With coord_flip(): largest at the top within each facet
       Reparto_short = forcats::fct_reorder(Reparto_short, n, .desc = FALSE)
     ) %>%
     ungroup() %>%
@@ -262,25 +307,41 @@ for (hospital in present_structures) {
     file.path(hospital_dir, "top5_by_component.csv")
   )
   
+  # Padding per-facet per NON troncare le etichette numeriche a destra.
+  pad_df <- top_by_macro %>%
+    group_by(macro) %>%
+    summarise(
+      Reparto_short = dplyr::first(Reparto_short),
+      pad_y = max(n, na.rm = TRUE) * if_else(macro == "RBC", 1.28, 1.18),
+      .groups = "drop"
+    )
+  
   p_top_fn <- function(){
-    ggplot(top_by_macro, aes(x = Reparto_short, y = n)) +
-      geom_col(width = 0.7) +
-      coord_flip() +
+    ggplot(top_by_macro, aes(x = Reparto_short, y = n, fill = macro)) +
+      geom_blank(data = pad_df, aes(x = Reparto_short, y = pad_y), inherit.aes = FALSE) +
+      geom_col(width = 0.7, colour = "grey25", linewidth = 0.2) +
+      geom_text(aes(label = scales::comma(n)),
+                hjust = -0.10, size = 3.8, colour = "grey20") +
+      coord_flip(clip = "off") +
       facet_wrap(~ macro, ncol = 3, scales = "free_y") +
-      labs(title = glue("Top 5 Departments by Component — {hospital}"),
-           x = "Department", y = "Number of transfusions") +
+      scale_fill_manual(values = macro_cols, guide = "none") +
+      scale_y_continuous(labels = comma, expand = expansion(mult = c(0.02, 0.02))) +
+      labs(
+        title = hospital,
+        x = "Department", y = "Number of transfusions"
+      ) +
       theme_thesis +
-      theme(strip.text = element_text(face = "bold"),
-            legend.position = "none")
+      theme(
+        axis.text.x      = element_text(angle = 35, hjust = 1, vjust = 1),
+        strip.text       = element_text(face = "bold", size = 12),
+        strip.background = element_rect(fill = "grey96", colour = NA),
+        plot.margin      = margin(t = 6, r = 36, b = 10, l = 14)
+      )
   }
-  # Legacy sizing to avoid overlap/squeezing
-  save_plot_or_placeholder(
-    pdata   = top_by_macro,
-    plot_fn = p_top_fn,
-    path    = file.path(hospital_dir, "top5_by_component.png"),
-    width_in  = 13,
-    height_in = 6.5,
-    dpi_in    = 150
+  ggsave(
+    filename = file.path(hospital_dir, "top5_by_component.png"),
+    plot     = p_top_fn(),
+    width    = top5_width_in, height = top5_height_in, units = "in", dpi = 150, bg = "white"
   )
 }
 
