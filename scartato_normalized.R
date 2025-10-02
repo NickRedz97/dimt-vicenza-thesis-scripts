@@ -1,10 +1,12 @@
 # Script R per l'analisi degli scarti (Excel 2023–2025) — mantiene tutte le colonne originali
-# Output: CSV canonici + grafici + tabelle PNG in stile "thesis"
+# Output: CSV canonici + grafici + tabelle PNG in stile "thesis" (uniforme con gli altri script)
+# NOTE VISIVE: niente titoli nei grafici, legende e assi più leggibili, date leggibili (EN),
+#              niente spazio vuoto sopra/sotto; dimensioni ottimizzate per Word (A4, margini 3 pt)
 
 suppressPackageStartupMessages({
   library(readxl);  library(readr);  library(dplyr);  library(tidyr);  library(janitor)
   library(lubridate); library(ggplot2); library(gridExtra); library(grid); library(stringr)
-  library(gt)   # <- tabelle PNG stile thesis
+  library(scales); library(gt)
 })
 
 # -------------------------------------------------------------------
@@ -24,6 +26,15 @@ years <- as.integer(gsub("^.*\\s(\\d{4})\\.xlsx$", "\\1", basename(files)))
 ord   <- order(years)
 files <- files[ord]; years <- years[ord]
 message("File trovati: ", paste(basename(files), collapse = ", "))
+
+# -------------------------------------------------------------------
+# Word/A4 sizing — PNG esattamente alla larghezza del testo (A4 portrait, margini 3 pt)
+# -------------------------------------------------------------------
+page_width_in   <- 8.27
+left_margin_pt  <- 3
+right_margin_pt <- 3
+target_ppi      <- 96
+content_width_in <- page_width_in - (left_margin_pt + right_margin_pt)/72
 
 # -------------------------------------------------------------------
 # Helpers parsing/normalization
@@ -68,7 +79,8 @@ enrich_keep_all_cols <- function(df_raw) {
   if (!is.na(emc_col)) {
     if ("emocomponente" %in% nms) df <- df %>% mutate(emocomponente = as.character(.data[["emocomponente"]]))
     else df <- df %>% mutate(emocomponente = as.character(.data[[emc_col]]))
-  } else if (!("emocomponente" %in% nms)) df <- df %>% mutate(emocomponente = NA_character_)
+  } else if (!("emocomponente" %in% nms)) df <- df %>% mutate(emocomponente = NA_character_
+  )
   
   if (!is.na(tipo_col)) {
     if ("tipo_consumo" %in% nms) df <- df %>% mutate(tipo_consumo = as.character(.data[["tipo_consumo"]]))
@@ -124,86 +136,46 @@ summary_df <- df %>%
 write_csv(summary_df, file.path(outputs_dir, "scarti_summary.csv"))
 
 # -------------------------------------------------------------------
-# STILI: grafici + TABELLE PNG THESIS (gt)
+# STILI: grafici + TABELLE PNG THESIS (uniformati, senza titoli)
 # -------------------------------------------------------------------
+pal_macro <- c("RBCs"="#0072B2","Plasma"="#009E73","Platelets"="#D55E00","Other"="#999999")
+
 theme_thesis <- function(base_size = 12) {
   theme_minimal(base_size = base_size) +
     theme(
-      plot.title   = element_text(face = "bold", hjust = 0.0, margin = margin(b = 6)),
-      axis.title   = element_text(face = "plain"),
+      plot.title   = element_blank(),
+      plot.subtitle= element_blank(),
+      axis.title   = element_text(face = "bold", size = base_size+0),
+      axis.text    = element_text(size = base_size),
       axis.text.x  = element_text(angle = 45, hjust = 1),
+      panel.grid.minor = element_blank(),
       legend.position = "bottom",
       legend.title    = element_blank(),
-      legend.text     = element_text(size = base_size - 1),
-      panel.grid.minor = element_blank(),
-      plot.margin = margin(10, 24, 10, 10)
+      legend.text     = element_text(size = base_size+1),
+      legend.key.width  = unit(1.0, "lines"),
+      legend.key.height = unit(1.0, "lines"),
+      legend.box.margin = margin(6, 20, 6, 20),
+      plot.margin       = margin(2, 18, 2, 12)
     )
 }
 legend_compact <- theme(
-  legend.key.width  = unit(0.7, "lines"),
-  legend.key.height = unit(0.7, "lines"),
-  legend.box.margin = margin(2,2,2,2)
+  legend.key.width  = unit(0.9, "lines"),
+  legend.key.height = unit(0.9, "lines")
 )
+
 shorten_label <- function(s, max_chars = 28) {
   s <- as.character(s)
   ifelse(nchar(s) > max_chars, paste0(substr(s,1,max_chars-1), "…"), s)
 }
 
-# ---- Thesis table helpers (coerenti con altri script) ----
-.page_width_in    <- 8.27
-.left_margin_pt   <- 3
-.right_margin_pt  <- 3
-.target_ppi       <- 96
-.content_width_in <- .page_width_in - (.left_margin_pt + .right_margin_pt)/72
-.content_width_px <- round(.content_width_in * .target_ppi)
-.table_pct_width  <- 80  # % della larghezza utile (spazio bianco laterale coerente)
-
-gt_style_thesis <- function(gt_tbl,
-                            title_px = 13, base_px = 11, label_px = 11,
-                            font_family = c("Times New Roman","Liberation Serif","serif"),
-                            table_pct_local = .table_pct_width) {
-  gt_tbl %>%
-    gt::tab_options(
-      table.align = "center",
-      table.width = gt::pct(table_pct_local),
-      table.font.names = font_family,
-      table.font.size  = gt::px(base_px),
-      heading.title.font.size = gt::px(title_px),
-      data_row.padding = gt::px(6),
-      column_labels.border.top.width    = gt::px(1),
-      column_labels.border.bottom.width = gt::px(1),
-      column_labels.vlines.width        = gt::px(0),
-      table.border.top.width            = gt::px(0),
-      table.border.bottom.width         = gt::px(0),
-      column_labels.background.color    = "white",
-      heading.background.color          = "white"
-    ) %>%
-    gt::cols_align(align = "right", columns = gt::everything()) %>%
-    gt::cols_align(align = "left",  columns = 1) %>%  # prima colonna a sinistra
-    gt::tab_style(
-      style = gt::cell_text(weight = "bold", size = gt::px(label_px)),
-      locations = gt::cells_column_labels(gt::everything())
-    ) %>%
-    gt::opt_row_striping()
-}
-
-# Converte (se possibile) tutte le colonne tranne la prima in numeric e formatta come interi
-thesis_table_png_df <- function(df, title, out_png) {
-  num_cols <- names(df)[-1]
-  df_fmt <- df
-  for (cc in num_cols) {
-    if (!is.numeric(df_fmt[[cc]])) {
-      as_num <- suppressWarnings(as.numeric(df_fmt[[cc]]))
-      if (!all(is.na(as_num))) df_fmt[[cc]] <- as_num
-    }
+label_date_en <- function(fmt = "%b %Y") {
+  function(d) {
+    old <- try(Sys.getlocale("LC_TIME"), silent = TRUE)
+    on.exit(try(Sys.setlocale("LC_TIME", old), silent = TRUE))
+    ok <- try(Sys.setlocale("LC_TIME", "C"), silent = TRUE)
+    if (inherits(ok, "try-error") || is.na(ok)) try(Sys.setlocale("LC_TIME", "English"), silent = TRUE)
+    format(d, fmt)
   }
-  gt_tbl <- df_fmt %>%
-    gt::gt() %>%
-    gt::tab_header(title = title) %>%
-    gt::fmt_number(columns = num_cols, decimals = 0, use_seps = TRUE) %>%
-    gt_style_thesis()
-  dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)
-  gt::gtsave(gt_tbl, filename = out_png, vwidth = .content_width_px, expand = 0)
 }
 
 # -------------------------------------------------------------------
@@ -239,22 +211,45 @@ df_vis <- df %>%
   )
 
 # -------------------------------------------------------------------
-# 3 GRAFICI (immutati)
+# Utility: ordinamento per facet SENZA dipendenze esterne
+# -------------------------------------------------------------------
+reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
+  x <- paste(x, within, sep = sep)
+  stats::reorder(x, by, FUN = fun)
+}
+scale_x_reordered <- function(..., sep = "___") {
+  ggplot2::scale_x_discrete(labels = function(x) gsub(paste0(sep, ".*$"), "", x), ...)
+}
+
 # -------------------------------------------------------------------
 # G1 — Monthly wasted units by macro (stacked)
+# -------------------------------------------------------------------
 g1_df <- df_vis %>%
   filter(!is.na(month)) %>%
   count(month, macro, name = "wasted_units")
 
-g1 <- ggplot(g1_df, aes(x = month, y = wasted_units, fill = macro)) +
-  geom_col() +
-  scale_y_continuous(labels = scales::comma) +
-  labs(title = "Monthly wasted units by macro-component",
-       x = "Month", y = "Units") +
-  theme_thesis() + legend_compact
-ggsave(file.path(outputs_dir, "g1_waste_by_macro_month.png"), g1, width = 13, height = 6, dpi = 300)
+if (nrow(g1_df)) {
+  min_m <- min(g1_df$month, na.rm = TRUE)
+  max_m <- max(g1_df$month, na.rm = TRUE)
+  quarter_breaks <- seq(floor_date(min_m, "quarter"), ceiling_date(max_m, "quarter"), by = "3 months")
+  
+  g1 <- ggplot(g1_df, aes(x = month, y = wasted_units, fill = macro)) +
+    geom_col() +
+    scale_fill_manual(values = pal_macro) +
+    scale_y_continuous(labels = comma) +
+    scale_x_date(breaks = quarter_breaks, labels = label_date_en("%b %Y"),
+                 expand = expansion(mult = c(0.005, 0.02))) +
+    labs(x = "Month", y = "Units") +
+    theme_thesis() + legend_compact +
+    coord_cartesian(clip = "off")
+  
+  ggsave(file.path(outputs_dir, "g1_waste_by_macro_month.png"),
+         g1, width = content_width_in, height = 5.8, dpi = target_ppi, units = "in")
+}
 
+# -------------------------------------------------------------------
 # G2 — Wastage reasons: share by macro (100% stacked)
+# -------------------------------------------------------------------
 g2_df <- df_vis %>%
   mutate(tipo_consumo = ifelse(is.na(tipo_consumo) | tipo_consumo == "", "Unknown", tipo_consumo)) %>%
   count(macro, tipo_consumo, name = "n") %>%
@@ -262,36 +257,117 @@ g2_df <- df_vis %>%
   mutate(perc = n / sum(n)) %>%
   ungroup()
 
-g2 <- ggplot(g2_df, aes(x = macro, y = perc, fill = tipo_consumo)) +
-  geom_col(position = "fill") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  labs(title = "Wastage reasons — composition by macro",
-       x = "Macro-component", y = "Share") +
-  theme_thesis() + legend_compact
-ggsave(file.path(outputs_dir, "g2_reasons_share_by_macro.png"), g2, width = 13, height = 6, dpi = 300)
+if (nrow(g2_df)) {
+  g2 <- ggplot(g2_df, aes(x = macro, y = perc, fill = tipo_consumo)) +
+    geom_col(position = "fill") +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    scale_fill_brewer(palette = "Set2", na.translate = FALSE) +
+    labs(x = "Macro-component", y = "Share") +
+    theme_thesis() +
+    guides(fill = guide_legend(ncol = 2, byrow = TRUE))
+  
+  ggsave(file.path(outputs_dir, "g2_reasons_share_by_macro.png"),
+         g2, width = content_width_in, height = 5.8, dpi = target_ppi, units = "in")
+}
 
-# G3 — Top 10 discarded components per macro (faceted, horizontal bars)
+# -------------------------------------------------------------------
+# G3 — Top 5 discarded components per macro (faceted, horizontal bars) — LOG SCALE
+# -------------------------------------------------------------------
 g3_df <- df_vis %>%
   filter(macro %in% c("RBCs","Plasma","Platelets")) %>%
+  mutate(
+    emc_short = ifelse(is.na(emc_short) | emc_short == "", "Other/Unknown", emc_short)
+  ) %>%
   count(macro, emc_short, name = "n") %>%
   group_by(macro) %>%
-  arrange(macro, desc(n)) %>%
-  slice_head(n = 10) %>%
-  ungroup()
+  arrange(desc(n), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>%
+  filter(n > 0)   # evita problemi col log(0)
 
-g3 <- ggplot(g3_df, aes(x = reorder_within(emc_short, n, macro), y = n, fill = macro)) +
-  geom_col(show.legend = FALSE) +
-  scale_x_reordered() +
-  coord_flip() +
-  facet_wrap(~ macro, scales = "free_y") +
-  labs(title = "Top 10 discarded components — by macro",
-       x = "Component (shortened)", y = "Units") +
-  theme_thesis()
-ggsave(file.path(outputs_dir, "g3_top_components_by_macro.png"), g3, width = 14, height = 8, dpi = 300)
+if (nrow(g3_df)) {
+  # Ordine entro ciascun facet senza dipendenze esterne
+  g3_df <- g3_df %>%
+    group_by(macro) %>%
+    arrange(n, .by_group = TRUE) %>%
+    mutate(emc_key = paste(macro, emc_short, sep = "___"),
+           ord_key = factor(emc_key, levels = emc_key)) %>%
+    ungroup()
+  
+  g3 <- ggplot(g3_df,
+               aes(x = ord_key, y = n, fill = macro)) +
+    geom_col(show.legend = FALSE) +
+    scale_fill_manual(values = pal_macro) +
+    # ------- LOG SCALE SOLO QUI -------
+  scale_y_log10(labels = comma, breaks = scales::breaks_log(n = 6, base = 10)) +
+    coord_flip() +
+    facet_wrap(~ macro, ncol = 1, scales = "free_y") +
+    labs(x = "Component (shortened)", y = "Units (log scale)") +
+    theme_thesis() +
+    theme(
+      strip.text   = element_text(face = "bold", size = 12),
+      axis.text.y  = element_text(size = 11),
+      plot.margin  = margin(6, 26, 6, 10)
+    ) +
+    scale_x_discrete(labels = function(x) sub("^.*___", "", x))
+  
+  ggsave(file.path(outputs_dir, "g3_top_components_by_macro.png"),
+         g3, width = content_width_in, height = 9.0, dpi = target_ppi, units = "in")
+}
 
 # -------------------------------------------------------------------
 # 3 TABELLE PNG (stile thesis, con CSV già salvati dove presenti)
 # -------------------------------------------------------------------
+.content_width_px <- round(content_width_in * target_ppi)
+.table_pct_width  <- 80
+
+gt_style_thesis <- function(gt_tbl,
+                            title_px = 13, base_px = 11, label_px = 11,
+                            font_family = c("Times New Roman","Liberation Serif","serif"),
+                            table_pct_local = .table_pct_width) {
+  gt_tbl %>%
+    gt::tab_options(
+      table.align = "center",
+      table.width = gt::pct(table_pct_local),
+      table.font.names = font_family,
+      table.font.size  = gt::px(base_px),
+      heading.title.font.size = gt::px(title_px),
+      data_row.padding = gt::px(6),
+      column_labels.border.top.width    = gt::px(1),
+      column_labels.border.bottom.width = gt::px(1),
+      column_labels.vlines.width        = gt::px(0),
+      table.border.top.width            = gt::px(0),
+      table.border.bottom.width         = gt::px(0),
+      column_labels.background.color    = "white",
+      heading.background.color          = "white"
+    ) %>%
+    gt::cols_align(align = "right", columns = gt::everything()) %>%
+    gt::cols_align(align = "left",  columns = 1) %>%
+    gt::tab_style(
+      style = gt::cell_text(weight = "bold", size = gt::px(label_px)),
+      locations = gt::cells_column_labels(gt::everything())
+    ) %>%
+    gt::opt_row_striping()
+}
+
+thesis_table_png_df <- function(df, title, out_png) {
+  num_cols <- names(df)[-1]
+  df_fmt <- df
+  for (cc in num_cols) {
+    if (!is.numeric(df_fmt[[cc]])) {
+      as_num <- suppressWarnings(as.numeric(df_fmt[[cc]]))
+      if (!all(is.na(as_num))) df_fmt[[cc]] <- as_num
+    }
+  }
+  gt_tbl <- df_fmt %>%
+    gt::gt() %>%
+    gt::tab_header(title = title) %>%
+    gt::fmt_number(columns = num_cols, decimals = 0, use_seps = TRUE) %>%
+    gt_style_thesis()
+  dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)
+  gt::gtsave(gt_tbl, filename = out_png, vwidth = .content_width_px, expand = 0)
+}
+
 # T1 — Year × Macro (counts)
 t1_wide <- df_vis %>%
   filter(!is.na(year)) %>%
@@ -323,14 +399,3 @@ readr::write_csv(t3_tbl, file.path(outputs_dir, "t3_top_simt.csv"))
 thesis_table_png_df(t3_tbl, "Top 15 SIMT by wasted units (overall)", file.path(outputs_dir, "t3_top_simt.png"))
 
 message("SCARTATO OK. CSV canonici in ", normalized_dir, " — Grafici/Tabelle in ", outputs_dir)
-
-# -------------------------------------------------------------------
-# Utility per ordinare etichette dentro facet (come altrove)
-# -------------------------------------------------------------------
-reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
-  x <- paste(x, within, sep = sep)
-  stats::reorder(x, by, FUN = fun)
-}
-scale_x_reordered <- function(..., sep = "___") {
-  ggplot2::scale_x_discrete(labels = function(x) gsub(paste0(sep, ".*$"), "", x), ...)
-}
