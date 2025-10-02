@@ -5,12 +5,18 @@
 # Outputs     : For each macro:
 #                 - Monthly flows (stacked)
 #                 - Monthly flows (time series)
-#                 - Flows by component (stacked, facet by flow)
+#                 - Flows by component (stacked, facet by flow)  [legend pruned + 'Other']
 #                 - Wastage rate (%)
 #               Plus annual PNG/CSV tables of collection by blood group
 #               (rows = months; 2025 up to May).
-# Notes       : Plasma excludes PLT/4305/"piastr*"; Platelets includes 4305/PLT/buffy;
-#               macro "Altro" removed; plasma-like labels excluded from Emazie/Piastrine plots.
+# Notes       : Readability improvements; data logic unchanged.
+#               Flows-by-component ONLY — filters:
+#                 - RBCs: keep "1 - SANGUE INTERO" and unify all code 25 variants
+#                         as "25 - EMAZIE CONC. LEUCODEPLETE PRE-STORAGE";
+#                         everything else → "Other" (no NA in legend nor blanks).
+#                 - Plasma: keep 1, 5, 7, 42, 0508.
+#                 - Platelets: keep 1, 18, 43, 2004, 1904, 4304 (normalized labels);
+#                         everything else → "Other" and **no NA gaps**.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -73,91 +79,75 @@ std_emocomp <- function(x) {
 
 # Recognizers
 is_whole_blood <- function(x) { x0 <- tolower(x); str_detect(x0, "sangue\\s*intero") }
-is_rbc <- function(x) { x0 <- tolower(x); str_detect(x0, "emaz|eritro|\\brbc\\b|\\b250(4)?\\b|leucodeplet") & !str_detect(x0, "plasm|\\bplt\\b|piastr|buffy") }
-is_plasma <- function(x) { x0 <- tolower(x); str_detect(x0, "plasm") & !str_detect(x0, "\\bplt\\b|piastr|buffy|\\b4305\\b") }
-is_platelet <- function(x) { x0 <- tolower(x); str_detect(x0, "\\b4305\\b|\\bplt\\b|piastr|platelet|buffy") }
+is_rbc         <- function(x) { x0 <- tolower(x); str_detect(x0, "emaz|eritro|\\brbc\\b|\\b250(4)?\\b|leucodeplet") & !str_detect(x0, "plasm|\\bplt\\b|piastr|buffy") }
+is_plasma      <- function(x) { x0 <- tolower(x); str_detect(x0, "plasm") & !str_detect(x0, "\\bplt\\b|piastr|buffy|\\b4305\\b") }
+is_platelet    <- function(x) { x0 <- tolower(x); str_detect(x0, "\\b4305\\b|\\bplt\\b|piastr|platelet|buffy") }
 
 is_plasma_std <- function(x_std) { xs <- toupper(as.character(x_std)); str_detect(xs, "\\bPLASMA\\b|DEPLASM") }
 
 macro_from_component <- function(x) {
   case_when(
-    is_rbc(x)        ~ "Emazie",
-    is_plasma(x)     ~ "Plasma",
-    is_platelet(x)   ~ "Piastrine",
-    TRUE             ~ NA_character_
+    is_rbc(x)      ~ "Emazie",
+    is_plasma(x)   ~ "Plasma",
+    is_platelet(x) ~ "Piastrine",
+    TRUE           ~ NA_character_
   )
 }
 
-legend_compact <- theme(
-  legend.position = "bottom",
-  legend.text = element_text(size = 7),
-  legend.key.width = grid::unit(0.65, "lines"),
-  legend.key.height = grid::unit(0.65, "lines"),
-  legend.box.margin = margin(t=2, r=2, b=2, l=2),
-  plot.margin = margin(10, 26, 10, 10)
-)
-
-shorten_label <- function(s, max_chars = 26) {
-  s <- as.character(s)
-  ifelse(nchar(s) > max_chars, paste0(substr(s,1,max_chars-1),"…"), s)
+# English month labels
+label_date_en <- function(fmt = "%b %Y") {
+  function(d) {
+    old <- try(Sys.getlocale("LC_TIME"), silent = TRUE)
+    on.exit(try(Sys.setlocale("LC_TIME", old), silent = TRUE))
+    ok <- try(Sys.setlocale("LC_TIME", "C"), silent = TRUE)
+    if (inherits(ok, "try-error") || is.na(ok)) try(Sys.setlocale("LC_TIME", "English"), silent = TRUE)
+    format(d, fmt)
+  }
 }
+
+macro_title <- function(mc) switch(mc, "Emazie" = "RBCs", "Plasma" = "Plasma", "Piastrine" = "Platelets", mc)
 
 # -----------------------------------------------------------------------------
 # WORD/A4 SIZING 
 # -----------------------------------------------------------------------------
-page_width_in   <- 8.27   # A4 portrait width
-left_margin_pt  <- 3      # side margins in points
+page_width_in   <- 8.27
+left_margin_pt  <- 3
 right_margin_pt <- 3
-target_ppi      <- 96     # Word inserts at exact size at 96 ppi
+target_ppi      <- 96
 content_width_in <- page_width_in - (left_margin_pt + right_margin_pt)/72
 
-# Suggested heights (inches) for readability at content width
 h_stacked_in   <- 5.8
 h_timeseries_in<- 5.8
 h_wastage_in   <- 4.8
-h_bycomp_in    <- 8.6
+h_bycomp_in    <- 10.2   # tall to host 2-col legend comfortably
 
-# Thesis table style (gt)
-table_pct <- 80  # table body occupies 80% of canvas width (balanced lateral breathing room)
-
-gt_style_thesis <- function(gt_tbl,
-                            title_px = 13, base_px = 11, label_px = 11,
-                            font_family = c("Times New Roman","Liberation Serif","serif"),
-                            table_pct_local = table_pct) {
-  gt_tbl %>%
-    tab_options(
-      table.align = "center",
-      table.width = pct(table_pct_local),
-      table.font.names = font_family,
-      table.font.size  = px(base_px),
-      heading.title.font.size = px(title_px),
-      data_row.padding = px(6),
-      column_labels.border.top.width    = px(1),
-      column_labels.border.bottom.width = px(1),
-      column_labels.vlines.width        = px(0),
-      table.border.top.width            = px(0),
-      table.border.bottom.width         = px(0),
-      column_labels.background.color    = "white",
-      heading.background.color          = "white"
-    ) %>%
-    tab_style(
-      style = cell_text(weight = "bold", size = px(label_px)),
-      locations = cells_column_labels(everything())
-    ) %>%
-    cols_align(align = "left",  columns = where(~ !is.numeric(.))) %>%
-    cols_align(align = "right", columns = where(is.numeric)) %>%
-    opt_row_striping()
-}
-
-save_gt_png <- function(gt_tbl, path) {
-  ensure_dir(dirname(path))
-  gt::gtsave(
-    gt_tbl,
-    file   = path,
-    vwidth = round(content_width_in * target_ppi),  # canvas = text width
-    expand = 0                                      # no external whitespace
+# -----------------------------------------------------------------------------
+# THEME
+# -----------------------------------------------------------------------------
+theme_thesis <- theme_minimal(base_family = "serif", base_size = 12) +
+  theme(
+    plot.title   = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title   = element_text(face = "bold", size = 12),
+    axis.text    = element_text(size = 11),
+    panel.grid.minor = element_blank(),
+    legend.title = element_blank(),
+    plot.margin  = margin(6, 28, 6, 28) # extra lateral room to avoid legend truncation
   )
-}
+
+theme_legend_big <- theme(
+  legend.position   = "bottom",
+  legend.text       = element_text(size = 11),
+  legend.key.width  = grid::unit(1.0, "lines"),
+  legend.key.height = grid::unit(1.0, "lines"),
+  legend.box.margin = margin(10, 30, 10, 30) # extra padding to prevent clipping
+)
+
+theme_axes_big <- theme(
+  axis.text.x  = element_text(size = 11, angle = 45, hjust = 1),
+  axis.text.y  = element_text(size = 11),
+  axis.title.x = element_text(size = 12),
+  axis.title.y = element_text(size = 12)
+)
 
 # -----------------------------------------------------------------------------
 # LOAD FILES
@@ -240,11 +230,11 @@ sct <- scartato %>%
 
 css <- cessioni %>%
   mutate(
-    data              = ensure_date(data),
+    data                = ensure_date(data),
     numero_unita_cedute = suppressWarnings(as.numeric(numero_unita_cedute)),
-    macro             = macro_from_component(emocomponente),
-    emocomponente_std = std_emocomp(emocomponente),
-    month             = floor_date(data, "month")
+    macro               = macro_from_component(emocomponente),
+    emocomponente_std   = std_emocomp(emocomponente),
+    month               = floor_date(data, "month")
   ) %>% filter(!is.na(macro))
 
 # -----------------------------------------------------------------------------
@@ -259,7 +249,47 @@ months_all <- seq.Date(
 )
 months_df <- tibble(month = months_all)
 
-# Annual tables (collection by group × month)
+# -----------------------------------------------------------------------------
+# TABLE EXPORT HELPERS
+# -----------------------------------------------------------------------------
+gt_style_thesis <- function(gt_tbl,
+                            title_px = 13, base_px = 11, label_px = 11,
+                            font_family = c("Times New Roman","Liberation Serif","serif"),
+                            table_pct_local = 80) {
+  gt_tbl %>%
+    tab_options(
+      table.align = "center",
+      table.width = pct(table_pct_local),
+      table.font.names = font_family,
+      table.font.size  = px(base_px),
+      heading.title.font.size = px(title_px),
+      data_row.padding = px(6),
+      column_labels.border.top.width    = px(1),
+      column_labels.border.bottom.width = px(1),
+      column_labels.vlines.width        = px(0),
+      table.border.top.width            = px(0),
+      table.border.bottom.width         = px(0),
+      column_labels.background.color    = "white",
+      heading.background.color          = "white"
+    ) %>%
+    tab_style(
+      style = cell_text(weight = "bold", size = px(label_px)),
+      locations = cells_column_labels(everything())
+    ) %>%
+    cols_align(align = "left",  columns = where(~ !is.numeric(.))) %>%
+    cols_align(align = "right", columns = where(is.numeric)) %>%
+    opt_row_striping()
+}
+save_gt_png <- function(gt_tbl, path) {
+  ensure_dir(dirname(path))
+  gt::gtsave(
+    gt_tbl,
+    file   = path,
+    vwidth = round(content_width_in * target_ppi),
+    expand = 0
+  )
+}
+
 save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) {
   months_year <- tibble(month = seq.Date(as.Date(paste0(year_sel,"-01-01")),
                                          as.Date(paste0(year_sel,"-12-01")), by = "month"))
@@ -291,10 +321,8 @@ save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) 
   csv_path <- file.path(dir_csv, glue("{mc}_by_group_{year_sel}.csv"))
   png_path <- file.path(dir_tab, glue("{mc}_by_group_{year_sel}.png"))
   
-  # CSV (Italian header 'Mese' as requested)
   readr::write_csv(df_wide, csv_path)
   
-  # PNG (English 'Month' for captioning consistency)
   df_wide_png <- df_wide %>% rename(Month = Mese)
   tab <- df_wide_png %>%
     gt() %>%
@@ -306,6 +334,9 @@ save_group_tables_for_year <- function(mc, year_sel, rac_sel, dir_csv, dir_tab) 
   log_msg(glue("[{mc}][{year_sel}] group tables saved (rows={nrow(df_wide_png)})"))
 }
 
+# -----------------------------------------------------------------------------
+# MAIN LOOP
+# -----------------------------------------------------------------------------
 for (mc in macro_levels) {
   log_msg("== Macro: ", mc, " ==")
   out_macro_dir <- file.path(out_root, mc)
@@ -314,52 +345,28 @@ for (mc in macro_levels) {
   dir_tab   <- file.path(out_macro_dir, "tabelle png")
   invisible(lapply(c(dir_csv, dir_plot, dir_tab), ensure_dir))
   
-  # RACCOLTA selection per macro
-  rac_m <- rac %>%
-    filter(
-      (mc == "Emazie"    & (is_whole_blood(emocomponente) | is_rbc(emocomponente))) |
-        (mc == "Plasma"    & (is_whole_blood(emocomponente) | is_plasma(emocomponente))) |
-        (mc == "Piastrine" & (is_whole_blood(emocomponente) | is_platelet(emocomponente)))
-    )
-  
+  # Selection per macro (unchanged for KPI computations)
+  rac_m <- rac %>% filter(
+    (mc == "Emazie"    & (is_whole_blood(emocomponente) | is_rbc(emocomponente))) |
+      (mc == "Plasma"    & (is_whole_blood(emocomponente) | is_plasma(emocomponente))) |
+      (mc == "Piastrine" & (is_whole_blood(emocomponente) | is_platelet(emocomponente)))
+  )
   trf_m <- trf %>% filter(macro == mc)
   sct_m <- sct %>% filter(macro == mc)
   css_m <- css %>% filter(macro == mc)
   
-  log_msg(glue("[{mc}] Rows -> rac:{nrow(rac_m)} trf:{nrow(trf_m)} sct:{nrow(sct_m)} css:{nrow(css_m)}"))
-  
   # Monthly aggregations
-  agg_rac <- rac_m %>%
-    group_by(month) %>%
-    summarise(
-      components_collected = sum(numero_emocomponenti, na.rm = TRUE),
-      sacs_collected = n_distinct(cdm),
-      .groups = "drop"
-    )
-  
-  agg_trf <- trf_m %>%
-    group_by(month) %>%
-    summarise(
-      transf_rows = n(),
-      sacs_transfused = n_distinct(cdm),
-      .groups = "drop"
-    )
-  
+  agg_rac <- rac_m %>% group_by(month) %>% summarise(
+    components_collected = sum(numero_emocomponenti, na.rm = TRUE),
+    sacs_collected = n_distinct(cdm), .groups = "drop")
+  agg_trf <- trf_m %>% group_by(month) %>% summarise(
+    transf_rows = n(), sacs_transfused = n_distinct(cdm), .groups = "drop")
   has_cdm_sct <- "cdm" %in% names(sct_m)
-  agg_sct <- sct_m %>%
-    group_by(month) %>%
-    summarise(
-      components_wasted = sum(sct_qty, na.rm = TRUE),
-      sacs_wasted = if (has_cdm_sct) n_distinct(cdm) else NA_integer_,
-      .groups = "drop"
-    )
-  
-  agg_css <- css_m %>%
-    group_by(month) %>%
-    summarise(
-      units_ceded = sum(numero_unita_cedute, na.rm = TRUE),
-      .groups = "drop"
-    )
+  agg_sct <- sct_m %>% group_by(month) %>% summarise(
+    components_wasted = sum(sct_qty, na.rm = TRUE),
+    sacs_wasted = if (has_cdm_sct) n_distinct(cdm) else NA_integer_, .groups = "drop")
+  agg_css <- css_m %>% group_by(month) %>% summarise(
+    units_ceded = sum(numero_unita_cedute, na.rm = TRUE), .groups = "drop")
   
   monthly <- months_df %>%
     left_join(agg_rac, by = "month") %>%
@@ -377,24 +384,20 @@ for (mc in macro_levels) {
                                 round(components_wasted / components_collected * 100, 2),
                                 NA_real_)
     )
-  
-  # CSV export
   readr::write_csv(monthly, file.path(dir_csv, glue("{mc}_monthly_kpi.csv")))
   
-  # ------
-  # PLOTS 
-  # ------
+  # ---- PLOTS (uniform style) ----
   serie_labels <- c(
     components_collected = "Collected (units)",
     transf_rows          = "Transfused (rows)",
     components_wasted    = "Wasted (units)",
     units_ceded          = "Ceded (units)"
   )
-  pal <- c(
-    "Collected (units)"  = "#1b9e77",
-    "Transfused (rows)"  = "#7570b3",
-    "Wasted (units)"     = "#d95f02",
-    "Ceded (units)"      = "#e7298a"
+  pal <- c( # Okabe–Ito
+    "Collected (units)"  = "#0072B2",
+    "Transfused (rows)"  = "#E69F00",
+    "Wasted (units)"     = "#D55E00",
+    "Ceded (units)"      = "#009E73"
   )
   
   # (1) Monthly flows — stacked
@@ -407,10 +410,9 @@ for (mc in macro_levels) {
     geom_col(position = "stack") +
     scale_fill_manual(values = pal, name = NULL, guide = guide_legend(nrow = 2)) +
     scale_y_continuous(labels = comma) +
-    labs(title = glue("{mc} — Monthly flows (stacked)"),
-         x = "Month", y = "Value") +
-    theme_minimal() + legend_compact +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    scale_x_date(date_breaks = "3 months", labels = label_date_en("%b %Y")) +
+    labs(title = macro_title(mc), x = "Month", y = "Value") +
+    theme_thesis + theme_legend_big + theme_axes_big
   ggsave(file.path(dir_plot, glue("{mc}_flows_stacked.png")), p_bar,
          width = content_width_in, height = h_stacked_in, units = "in", dpi = target_ppi)
   
@@ -420,28 +422,25 @@ for (mc in macro_levels) {
                  names_to = "serie", values_to = "val") %>%
     mutate(serie = recode(serie, !!!serie_labels))
   p_ts <- ggplot(df_ts, aes(x = month, y = val, colour = serie)) +
-    geom_line(linewidth = 1, na.rm = TRUE) +
+    geom_line(linewidth = 1.1, na.rm = TRUE) +
     scale_colour_manual(values = pal, name = NULL, guide = guide_legend(nrow = 2)) +
     scale_y_continuous(labels = comma) +
-    labs(title = glue("{mc} — Monthly flows (time series)"),
-         x = "Month", y = "Value") +
-    theme_minimal() + legend_compact +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    scale_x_date(date_breaks = "3 months", labels = label_date_en("%b %Y")) +
+    labs(title = macro_title(mc), x = "Month", y = "Value") +
+    theme_thesis + theme_legend_big + theme_axes_big
   ggsave(file.path(dir_plot, glue("{mc}_timeseries.png")), p_ts,
          width = content_width_in, height = h_timeseries_in, units = "in", dpi = target_ppi)
   
   # (3) Wastage rate (%)
   p_w <- ggplot(monthly, aes(x = month, y = wastage_rate_pct)) +
-    geom_col(fill = "#d95f02") +
-    labs(title = glue("{mc} — Wastage rate (%) by month"),
-         x = "Month", y = "%") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          plot.margin = margin(10, 26, 10, 10))
+    geom_col(fill = "#D55E00") +
+    scale_x_date(date_breaks = "3 months", labels = label_date_en("%b %Y")) +
+    labs(title = macro_title(mc), x = "Month", y = "%") +
+    theme_thesis + theme_axes_big
   ggsave(file.path(dir_plot, glue("{mc}_wastage_pct.png")), p_w,
          width = content_width_in, height = h_wastage_in, units = "in", dpi = target_ppi)
   
-  # (4) Flows by component (stacked per component, facet by flow)
+  # (4) Flows by component — ONLY HERE apply component filters/labels
   flow_by_emc <- bind_rows(
     rac_m %>% count(month, emocomponente_std, wt = numero_emocomponenti, name = "Collected"),
     trf_m %>% count(month, emocomponente_std, name = "Transfused"),
@@ -451,9 +450,15 @@ for (mc in macro_levels) {
     pivot_longer(cols = c(Collected, Transfused, Wasted, Ceded),
                  names_to = "flow", values_to = "val") %>%
     filter(!is.na(val)) %>%
+    # >>> CRITICAL FIX to avoid NA holes: normalize *before* aggregating by component <<<
+    mutate(emocomponente_std = ifelse(
+      is.na(emocomponente_std) | emocomponente_std %in% c("NA","") |
+        trimws(emocomponente_std) == "", "OTHER_UNSPECIFIED", emocomponente_std
+    )) %>%
     group_by(month, emocomponente_std, flow) %>%
     summarise(val = sum(val, na.rm = TRUE), .groups = "drop")
   
+  # Exclude plasma-like outside Plasma (original behavior)
   if (mc != "Plasma") {
     flow_by_emc <- flow_by_emc %>%
       mutate(is_plasma_like = is_plasma_std(emocomponente_std)) %>%
@@ -461,26 +466,93 @@ for (mc in macro_levels) {
       select(-is_plasma_like)
   }
   
+  extract_code <- function(s) stringr::str_match(as.character(s), "^(\\d{1,4})")[,2]
+  allowed_codes <- switch(mc,
+                          "Emazie"    = c("1","25"),
+                          "Plasma"    = c("1","5","7","42","0508","508"),
+                          "Piastrine" = c("1","18","43","2004","1904","4304"),
+                          character()
+  )
+  label_map <- switch(mc,
+                      "Emazie" = c(
+                        "1"  = "1 - SANGUE INTERO",
+                        "25" = "25 - EMAZIE CONC. LEUCODEPLETE PRE-STORAGE"
+                      ),
+                      "Piastrine" = c(
+                        "1"    = "1 - SANGUE INTERO",
+                        "18"   = "18 - CONCENTRATO PIASTRINICO",
+                        "43"   = "43 - PIASTRINE DA BUFFY COAT",
+                        "2004" = "2004 - PIASTRINE DA AFERESI",
+                        "1904" = "1904 - CONCENTRATO PIASTRINICO IRRADIATO",
+                        "4304" = "4304 - PIASTRINE DA AFERESI PRE-STOR IRRADIATE"
+                      ),
+                      "Plasma" = c(),
+                      c()
+  )
+  
   if (nrow(flow_by_emc)) {
-    flow_by_emc <- flow_by_emc %>% mutate(emc_short = shorten_label(emocomponente_std, 26))
-    p_comp <- ggplot(flow_by_emc, aes(x = month, y = val, fill = emc_short)) +
+    flow_by_emc <- flow_by_emc %>%
+      mutate(code = extract_code(emocomponente_std),
+             comp_group = dplyr::case_when(
+               !is.na(code) & code %in% allowed_codes ~
+                 ifelse(code %in% names(label_map), label_map[code], emocomponente_std),
+               TRUE ~ "Other"
+             ),
+             comp_group = ifelse(is.na(comp_group) | comp_group == "NA" | trimws(comp_group) == "", "Other", comp_group)) %>%
+      group_by(month, flow, comp_group) %>%
+      summarise(val = sum(val, na.rm = TRUE), .groups = "drop") %>%
+      ungroup()
+    
+    # Legend order: present mains (in allowed order) + Other
+    present_main <- flow_by_emc %>%
+      filter(comp_group != "Other") %>%
+      mutate(code = extract_code(comp_group)) %>%
+      filter(!is.na(code)) %>%
+      distinct(code, comp_group)
+    present_main <- present_main[match(allowed_codes, present_main$code), , drop = FALSE]
+    present_main <- present_main %>% filter(!is.na(comp_group))
+    legend_levels <- unique(c(present_main$comp_group, "Other"))
+    
+    # Wrapped labels (2-column legend), left-aligned to avoid truncation
+    wrap_lbl <- function(x, w = 32) stringr::str_wrap(x, width = w)
+    legend_labels <- wrap_lbl(legend_levels, 32)
+    
+    flow_by_emc <- flow_by_emc %>%
+      mutate(comp_group = factor(comp_group, levels = legend_levels))
+    
+    # Palette + grey for Other
+    base_cols <- c("#0072B2","#E69F00","#009E73","#D55E00","#56B4E9","#CC79A7","#F0E442","#000000")
+    n_main <- max(0, length(legend_levels) - 1)
+    comp_pal <- setNames(c(if (n_main>0) base_cols[seq_len(n_main)] else character(), "#999999"),
+                         legend_levels)
+    
+    p_comp <- ggplot(flow_by_emc, aes(x = month, y = val, fill = comp_group)) +
       geom_col(position = "stack") +
       facet_wrap(~flow, ncol = 1, scales = "free_y") +
-      labs(title = glue("{mc} — Flows by component (stacked)"),
-           x = "Month", y = "Value", fill = "Component") +
-      theme_minimal() +
-      theme(legend.position = "bottom",
-            legend.text = element_text(size = 6.5),
-            legend.key.width = grid::unit(0.6, "lines"),
-            legend.key.height = grid::unit(0.6, "lines"),
-            legend.box.margin = margin(2,2,2,2),
-            plot.margin = margin(10, 28, 10, 10)) +
-      guides(fill = guide_legend(nrow = 3))
+      scale_fill_manual(values = comp_pal,
+                        breaks = legend_levels,
+                        labels = legend_labels,
+                        na.translate = FALSE,
+                        name = "Component") +
+      scale_x_date(date_breaks = "3 months", labels = label_date_en("%b %Y")) +
+      labs(title = macro_title(mc), x = "Month", y = "Value") +
+      theme_thesis + theme_axes_big +
+      theme(
+        legend.position = "bottom",
+        legend.text = element_text(size = 11),
+        legend.key.width = grid::unit(1.0, "lines"),
+        legend.key.height = grid::unit(1.0, "lines"),
+        legend.box.margin = margin(12, 36, 12, 36), # more lateral padding
+        plot.margin = margin(8, 36, 8, 36)          # more room to avoid lateral truncation
+      ) +
+      guides(fill = guide_legend(ncol = 2, byrow = TRUE, label.hjust = 0))
+    
+    height_plot <- if (mc == "Piastrine") h_bycomp_in + 1.8 else h_bycomp_in
     ggsave(file.path(dir_plot, glue("{mc}_flows_by_component.png")), p_comp,
-           width = content_width_in, height = h_bycomp_in, units = "in", dpi = target_ppi)
+           width = content_width_in, height = height_plot, units = "in", dpi = target_ppi)
   }
   
-  # Annual group tables (PNG + CSV)
+  # Annual group tables (unchanged)
   for (yy in c(2023, 2024, 2025)) {
     save_group_tables_for_year(mc, yy, rac_m, dir_csv, dir_tab)
   }
